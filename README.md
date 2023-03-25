@@ -7,3 +7,5 @@ My analysis starts with a statistical outlook using naive models (e.g moving ave
 To do so, I try to combine time series forecast with external regressors that are easier to predict. This way, I can 'ground' my prediction (limit uncertainty explosion). One of my most hopeful external regressors so far are flu vaccination rates.
 
 My latest progress is in [this jupyter notebook](https://github.com/janelacode/revenueprediction_thesis/blob/main/prophet.ipynb) achieving 20-40% improvement with ML.
+
+An analysis of my predictive performance is in [this notebook](https://github.com/janelacode/revenueprediction_thesis/blob/main/compare_sarima_prophet.ipynb)
