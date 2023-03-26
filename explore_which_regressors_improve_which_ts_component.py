@@ -64,13 +64,13 @@ def print_mserr(df_gt, df_pred, naive_pred, best = None):
     perc_improvement = (math.sqrt(error2)-math.sqrt(error1))/max(math.sqrt(error1),math.sqrt(error2))
     return math.sqrt(error1)
 
-def configure_and_fit(col, external_name, df_sales, df_vaccines, df_cpi, kwargs):
+def configure_and_fit(cutoff, col, external_name, df_sales, df_vaccines, df_cpi, kwargs):
         df = pd.concat([df_sales, df_vaccines, df_cpi], axis=1)
         df['ds'] = df.index
         df['y']=df[col]
         df = prepare_time_series(df)
-        train_df = df[:-cutoff_train_test]
-        test_df = df[-cutoff_train_test:]
+        train_df = df[:-cutoff]
+        test_df = df[-cutoff:]
         print(f"prediction for {col}")
 
         model = create_and_fit_model(train_df, **kwargs)
@@ -85,69 +85,98 @@ def configure_and_fit(col, external_name, df_sales, df_vaccines, df_cpi, kwargs)
         forecast.set_index('Date', inplace=True)
 
         viz_df = train_df.join(forecast[['yhat', 'yhat_lower','yhat_upper']], how = 'outer')
-        return print_mserr(test_df, forecast, train_df[-12:]['y'].mean(), 1e99)
+        return model, print_mserr(test_df, forecast, train_df[-12:]['y'].mean(), 1e99)
 
+def get_rmse_per_category(cutoff, df_sales, df_vaccines):
+    kwargs = {
+        'changepoint_prior_scale': 0.2, 
+        'fourier_order_isnotcold': 1, 
+        'iscold_fourier_order': 5, 
+        'iscold_period': 1, 
+        'isnotcold_period': 1, 
+        'quarterly_fourier_order': 1, 
+        'quarterly_period': 4, 
+        'yearly_seasonality': 4, 
+        'vaccine_method': 'multiplicative', 
+        'vaccine_period': 0, 
+        'vaccine_prior_scale': 1,
+        'cpi_prior_scale': 1,
+        'cpi_method': 'multiplicative'
+    } 
+
+    col_categories = dict()
+    for col in df_sales.columns:
+        kwargs['cpi_period'] = 0
+        kwargs['vaccine_period'] = 0
+        model_w_vaccine, err_wo_vaccine = configure_and_fit(cutoff, col, 'vaccine', df_sales, df_vaccines, None, kwargs)
+        kwargs['vaccine_period'] = 1
+        model_wo_vaccine, err_w_vaccine = configure_and_fit(cutoff, col, 'vaccine', df_sales, df_vaccines, None, kwargs)
+        col_categories[col] = (err_w_vaccine - err_wo_vaccine)
+    return col_categories
 
 from prophet import Prophet
 from prophet.plot import add_changepoints_to_plot
 
 import math
 
-cutoff_train_test = 24
-df_sales = pd.read_excel("data_for_clustering.xlsx", parse_dates=True,usecols = "A,F,G,I,J,K,L,M").set_index('Date')
-df_sales.index = pd.to_datetime(df_sales.index)
-df_vaccines = pd.read_csv("vaccines.csv", parse_dates=True)
+if __name__ == "__main__":
+    cutoff_train_test = 24
+    df_sales = pd.read_excel("data_for_clustering.xlsx", parse_dates=True,usecols = "A,F,G,I,J,K,L,M").set_index('Date')
+    df_sales.index = pd.to_datetime(df_sales.index)
+    df_vaccines = pd.read_csv("vaccines.csv", parse_dates=True)
 
-df_vaccines['Date'] = pd.to_datetime(df_vaccines['Date'], format='%Y-%m')
-# df_vaccines['vaccine'] = df_vaccines['vaccine'].shift(-1)
+    df_vaccines['Date'] = pd.to_datetime(df_vaccines['Date'], format='%Y-%m')
+    # df_vaccines['vaccine'] = df_vaccines['vaccine'].shift(-1)
 
-# restrict additional regressor to same time
-df_vaccines = df_vaccines.set_index('Date')
+    # restrict additional regressor to same time
+    df_vaccines = df_vaccines.set_index('Date')
 
-# restrict additional regressor to same time
-df_vaccines = df_vaccines.loc[df_sales.index.min():df_sales.index.max(),:]
+    # restrict additional regressor to same time
+    df_vaccines = df_vaccines.loc[df_sales.index.min():df_sales.index.max(),:]
 
-cpi_cz = [99.5, 99.6, 99.6, 99.6, 99.7, 99.7, 100.0, 99.9, 99.6, 99.8, 99.5, 99.5, 99.7, 99.5, 99.7, 99.8, 100.1, 100.4, 100.5, 100.4, 100.2, 100.0, 100.0, 99.6, 99.5, 100.0, 100.1, 100.2, 100.1, 100.7, 100.5, 100.6, 100.9, 100.8, 100.5, 100.8, 101.2, 101.5, 100.7, 102.3, 102.7, 102.7, 102.7, 102.9, 102.9, 103.4, 103.3, 103.2, 103.7, 103.8, 103.9, 103.1, 104.5, 104.5, 104.4, 104.7, 105.2, 105.6, 105.8, 105.9, 105.6, 106.0, 105.9, 106.0, 105.3, 107.1, 107.3, 107.5, 107.6, 108.3, 108.5, 108.9, 109.0, 108.4, 108.9, 109.2, 109.4, 108.3, 111.0, 111.3, 111.2, 111.0, 111.4, 112.1, 112.6, 112.6, 111.9, 112.1, 112.1, 111.9, 111.8, 113.4, 113.6, 113.8, 114.4, 114.6, 115.2, 116.4, 117.2, 117.4, 118.6, 118.8, 119.3, 116.1, 124.6, 126.2, 128.3, 130.6, 132.9, 135.0, 136.8, 137.4, 138.5, 136.5, 138.1, 138.1, 133.6, 146.4, 147.3]
-data_cpi = {'Date': pd.date_range(start='2014-01-01', periods=len(cpi_cz), freq='MS'),
-        'CPI': cpi_cz}
+    cpi_cz = [99.5, 99.6, 99.6, 99.6, 99.7, 99.7, 100.0, 99.9, 99.6, 99.8, 99.5, 99.5, 99.7, 99.5, 99.7, 99.8, 100.1, 100.4, 100.5, 100.4, 100.2, 100.0, 100.0, 99.6, 99.5, 100.0, 100.1, 100.2, 100.1, 100.7, 100.5, 100.6, 100.9, 100.8, 100.5, 100.8, 101.2, 101.5, 100.7, 102.3, 102.7, 102.7, 102.7, 102.9, 102.9, 103.4, 103.3, 103.2, 103.7, 103.8, 103.9, 103.1, 104.5, 104.5, 104.4, 104.7, 105.2, 105.6, 105.8, 105.9, 105.6, 106.0, 105.9, 106.0, 105.3, 107.1, 107.3, 107.5, 107.6, 108.3, 108.5, 108.9, 109.0, 108.4, 108.9, 109.2, 109.4, 108.3, 111.0, 111.3, 111.2, 111.0, 111.4, 112.1, 112.6, 112.6, 111.9, 112.1, 112.1, 111.9, 111.8, 113.4, 113.6, 113.8, 114.4, 114.6, 115.2, 116.4, 117.2, 117.4, 118.6, 118.8, 119.3, 116.1, 124.6, 126.2, 128.3, 130.6, 132.9, 135.0, 136.8, 137.4, 138.5, 136.5, 138.1, 138.1, 133.6, 146.4, 147.3]
+    data_cpi = {'Date': pd.date_range(start='2014-01-01', periods=len(cpi_cz), freq='MS'),
+            'CPI': cpi_cz}
 
-df_cpi = pd.DataFrame(data_cpi).set_index('Date')
-df_cpi = df_cpi.loc[df_sales.index.min():df_sales.index.max(),:]
-kwargs = {
-     'changepoint_prior_scale': 0.2, 
-     'fourier_order_isnotcold': 1, 
-     'iscold_fourier_order': 5, 
-     'iscold_period': 1, 
-     'isnotcold_period': 1, 
-     'quarterly_fourier_order': 1, 
-     'quarterly_period': 4, 
-     'yearly_seasonality': 4, 
-     'vaccine_method': 'multiplicative', 
-     'vaccine_period': 0, 
-     'vaccine_prior_scale': 1,
-     'cpi_prior_scale': 1,
-     'cpi_method': 'multiplicative'
-} 
+    df_cpi = pd.DataFrame(data_cpi).set_index('Date')
+    df_cpi = df_cpi.loc[df_sales.index.min():df_sales.index.max(),:]
+    kwargs = {
+        'changepoint_prior_scale': 0.2, 
+        'fourier_order_isnotcold': 1, 
+        'iscold_fourier_order': 5, 
+        'iscold_period': 1, 
+        'isnotcold_period': 1, 
+        'quarterly_fourier_order': 1, 
+        'quarterly_period': 4, 
+        'yearly_seasonality': 4, 
+        'vaccine_method': 'multiplicative', 
+        'vaccine_period': 0, 
+        'vaccine_prior_scale': 1,
+        'cpi_prior_scale': 1,
+        'cpi_method': 'multiplicative'
+    } 
 
-col_categories = {'cpi':[], 'vaccine': []}
-for col in df_sales.columns:
-        kwargs['cpi_period'] = 0
-        kwargs['vaccine_period'] = 0
-        err_wo_vaccine = configure_and_fit(col, 'vaccine', df_sales, df_vaccines, df_cpi, kwargs)
-        kwargs['vaccine_period'] = 1
-        err_w_vaccine = configure_and_fit(col, 'vaccine', df_sales, df_vaccines, df_cpi, kwargs)
-        if err_w_vaccine < err_wo_vaccine:
-                col_categories['vaccine'].append((col,err_w_vaccine - err_wo_vaccine))
-        
-        kwargs['vaccine_period'] = 0
-        kwargs['cpi_period'] = 0
-        err_wo_vaccine = configure_and_fit(col, 'CPI', df_sales, df_vaccines, df_cpi, kwargs)
-        kwargs['cpi_period'] = 1
-        err_w_vaccine = configure_and_fit(col, 'CPI', df_sales, df_vaccines, df_cpi, kwargs)
-        if err_w_vaccine < err_wo_vaccine:
-                col_categories['cpi'].append((col,err_w_vaccine - err_wo_vaccine))
+    col_categories = {'cpi':[], 'vaccine': []}
+    for col in df_sales.columns:
+            kwargs['cpi_period'] = 0
+            kwargs['vaccine_period'] = 0
+            model_w_vaccine, err_wo_vaccine = configure_and_fit(cutoff_train_test, col, 'vaccine', df_sales, df_vaccines, df_cpi, kwargs)
+            kwargs['vaccine_period'] = 1
+            model_wo_vaccine, err_w_vaccine = configure_and_fit(cutoff_train_test, col, 'vaccine', df_sales, df_vaccines, df_cpi, kwargs)
+            if err_w_vaccine > err_wo_vaccine:
+                    col_categories['vaccine'].append((col,err_w_vaccine - err_wo_vaccine))
+            
+            kwargs['vaccine_period'] = 0
+            kwargs['cpi_period'] = 0
+            _, err_wo_vaccine = configure_and_fit(cutoff_train_test, col, 'CPI', df_sales, df_vaccines, df_cpi, kwargs)
+            kwargs['cpi_period'] = 1
+            _, err_w_vaccine = configure_and_fit(cutoff_train_test, col, 'CPI', df_sales, df_vaccines, df_cpi, kwargs)
+            if err_w_vaccine > err_wo_vaccine:
+                    col_categories['cpi'].append((col,err_w_vaccine - err_wo_vaccine))
 
-for key, value in col_categories.items():
-    print(f"The following components have influance on {key}")
-    for (name, delta) in value:
-         print(f"\t* {name} with RMSE delta {delta}")
+    for key, value in col_categories.items():
+        print(f"The following components have influance on {key}")
+        for (name, delta) in value:
+            print(f"\t* {name} with RMSE delta {delta}")
+
+
